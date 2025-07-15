@@ -68,6 +68,27 @@ int GgApp::main(int argc, const char* const* argv)
   // プログラムオブジェクトの作成
   GgSimpleShader shader{ PROJECT_NAME ".vert", PROJECT_NAME ".frag" };
 
+  // ウィンドウサイズの変更を抑制する
+  glfwSetWindowSizeLimits(window.get(), dWidth, dHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
+
+  // デプステクスチャを作成する
+  GLuint dtex;
+  glGenTextures(1, &dtex);
+  glBindTexture(GL_TEXTURE_2D, dtex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
+    dWidth, dHeight, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+  // テクスチャ座標値の Z 成分とデプステクスチャとの比較を行うようにする
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+  // もし R の値がテクスチャの値以下なら真 (つまり日向)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+  // デプステクスチャを一時保存するメモリを確保する
+  std::unique_ptr<GLfloat> depth(new GLfloat[dWidth * dWidth]);
+
   // 床の図形データの読み込み
   const GgSimpleObj floor{ "floor.obj" };
 
@@ -94,6 +115,8 @@ int GgApp::main(int argc, const char* const* argv)
     objectMaterialBuffer.loadAmbientAndDiffuse(r, g, b, 1.0f, i);
   }
 
+  const GLfloat lt[]{ 0.0f, 0.0f, 0.0f, 1.0f };
+
   // ビュー変換行列を mv に求める
   const auto mv{ ggLookat(0.0f, 3.0f, 8.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f) };
 
@@ -119,7 +142,16 @@ int GgApp::main(int argc, const char* const* argv)
       0.0f,   0.0f,   1.0f,   0.0f,
       0.0f,   0.0f,   0.0f,   1.0f
   };
-  const GgMatrix ms{ m };
+
+  const auto mvs{ ggLookat(lp[0], lp[1], lp[2], lt[0], lt[1], lt[2], 0.0f, 0.0f, 1.0f) };
+  const GgMatrix mps{ ggPerspective(1.5f, 1.0f, 1.0f, 5.0f) };
+
+  const GgMatrix ms{ mps * mvs };
+
+  // デプステクスチャのサンプラの uniform 変数の場所を取り出す
+  const auto depthLoc{ glGetUniformLocation(shader.get(), "depth") };
+  // シャドウマップ用の変換行列の uniform 変数の場所を取り出す
+  const auto msLoc{ glGetUniformLocation(shader.get(), "ms") };
 
   //
   // その他の設定
@@ -147,8 +179,43 @@ int GgApp::main(int argc, const char* const* argv)
     // シェーダプログラムの使用開始
     shader.use(lightBuffer);
 
+    // ビューポートをデプステクスチャのサイズに合わせる
+    glViewport(0, 0, dWidth, dHeight);
+    // デプスバッファのみ消去
+    glClear(GL_DEPTH_BUFFER_BIT);
+    // デプステクスチャの作成
+    for (int i = 1; i <= objects; ++i)
+    {
+      // アニメーションの変換行列
+      const auto ma{ animate(t, i) };
+      // 遮蔽物の描画
+      shader.loadMatrix(mps, mvs * ma);
+      object->draw();
+    }
+
+    // デプスバッファの読み込み
+    glReadPixels(0, 0, dWidth, dHeight, GL_DEPTH_COMPONENT, GL_FLOAT, depth.get());
+    // デプステクスチャに転送
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, dtex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, dWidth, dHeight,
+      GL_DEPTH_COMPONENT, GL_FLOAT, depth.get());
+
+    // デプステクスチャのテクスチャユニットを指定する
+    glUniform1i(depthLoc, 0);
+    // シャドウマップ用の変換行列を設定する
+    glUniformMatrix4fv(msLoc, 1, GL_FALSE, ms.get());
+
+    // ビューポートをウィンドウのサイズに合わせる
+    glViewport(0, 0, window.getWidth(), window.getHeight());
+
     // 画面消去
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // デプスファィティングを避けるためにポリゴンオフセットを設定する
+    glPolygonOffset(1.0f, 1.0f);
+    // ポリゴンの塗りつぶし領域においてポリゴンオフセットを有効にする
+    glEnable(GL_POLYGON_OFFSET_FILL);
 
     //
     // １．最初に床を描画します
@@ -176,7 +243,8 @@ int GgApp::main(int argc, const char* const* argv)
 
       // 影の描画 (楕円は XY 平面上にあるので X 軸中心に -π/2 回転)
       //   【宿題】楕円の代わりに影を落とす図形そのものを描く (-π/2 回転は不要)
-      shader.loadModelviewMatrix(mv * ms * ma * ggRotateX(-1.570796f));
+      //shader.loadModelviewMatrix(mv * ms * ma * ggRotateX(-1.570796f));
+      shader.loadModelviewMatrix(mps, mvs * ma);
       ellipse->draw();
     }
     glEnable(GL_DEPTH_TEST);

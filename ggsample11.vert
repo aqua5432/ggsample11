@@ -22,6 +22,7 @@ layout (std140) uniform Material
 uniform mat4 mv;                                      // モデルビュー変換行列
 uniform mat4 mp;                                      // 投影変換行列
 uniform mat4 mn;                                      // 法線ベクトルの変換行列
+uniform mat4 ms;
 
 // 頂点属性
 layout (location = 0) in vec4 pv;                     // ローカル座標系の頂点位置
@@ -31,6 +32,7 @@ layout (location = 1) in vec4 nv;                     // 頂点の法線ベク�
 out vec4 iamb;                                        // 環境光の反射光強度
 out vec4 idiff;                                       // 拡散反射光強度
 out vec4 ispec;                                       // 鏡面反射光強度
+out vec4 ps;
 
 void main(void)
 {
@@ -47,4 +49,5 @@ void main(void)
 
   // 頂点のスクリーン座標
   gl_Position = mp * p;
+  ps = ms * pv;
 }
